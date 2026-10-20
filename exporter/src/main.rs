@@ -88,6 +88,9 @@ impl Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BusClass { Lookup, Permutation }
 
+/// The Goldilocks prime `2^64 - 2^32 + 1`.
+const GOLDILOCKS_P: u64 = 0xffff_ffff_0000_0001;
+
 /// Every bus of `rand_zkvm::tables::bus`, classified by the type of its constant (so a bus that
 /// changes type fails to compile here). A bus missing from this list is an export error.
 fn bus_class(name: &str) -> Option<BusClass> {
@@ -114,7 +117,7 @@ fn bus_class(name: &str) -> Option<BusClass> {
 /// `receive`; the two are the same LogUp term, so reading it as a `receive` is exact.
 /// Returns the kind and the count to emit (`provide`/`receive` carry the multiplicity, sign
 /// removed).
-fn classify(chip: &str, bus_name: &str, count: &Expr, weight: u32) -> Result<(Kind, Expr)> {
+fn classify(chip: &str, owned: &str, bus_name: &str, count: &Expr, weight: u32) -> Result<(Kind, Expr)> {
     let unneg = |e: &Expr| -> Option<Expr> {
         match e {
             SymbolicExpr::Neg { x, .. } => Some((**x).clone()),
@@ -124,8 +127,22 @@ fn classify(chip: &str, bus_name: &str, count: &Expr, weight: u32) -> Result<(Ki
     };
     match bus_class(bus_name) {
         None => Err(format!("{chip}: interaction on unknown bus {bus_name:?} (add it to bus_class)")),
-        Some(BusClass::Lookup) if weight > 0 => Ok((Kind::Lookup, count.clone())),
+        Some(BusClass::Lookup) if weight > 0 => {
+            // A lookup count is a (gated) multiplicity. A negation, or a constant in the upper
+            // half of the field, is a `table_entry`'s `-n` pushed with a positive weight: a
+            // table-side entry that would be wrongly modelled as a lookup.
+            let negated = match count {
+                SymbolicExpr::Neg { .. } => true,
+                SymbolicExpr::Leaf(BaseLeaf::Constant(c)) => c.as_canonical_u64() >= GOLDILOCKS_P / 2,
+                _ => false,
+            };
+            if negated {
+                return Err(format!("{chip}: weight-{weight} interaction on lookup bus {bus_name:?} has a negated count; a table-side entry, not a lookup"));
+            }
+            Ok((Kind::Lookup, count.clone()))
+        }
         Some(BusClass::Lookup) => match unneg(count) {
+            Some(_) if bus_name != owned => Err(format!("{chip}: provide on bus {bus_name:?}, but the chip owns {owned:?}")),
             Some(n) => Ok((Kind::Provide, n)),
             None => Err(format!("{chip}: weight-0 interaction on lookup bus {bus_name:?} whose count is not a negation; not a table_entry")),
         },
@@ -142,7 +159,7 @@ struct Interaction { bus: String, kind: Kind, tuple: Vec<Expr>, count: Expr }
 
 struct Captured { width: usize, constraints: Vec<Expr>, interactions: Vec<Interaction> }
 
-fn capture<A>(chip: &str, air: &A) -> Result<Captured>
+fn capture<A>(chip: &str, owned: &str, air: &A) -> Result<Captured>
 where
     A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
 {
@@ -158,7 +175,7 @@ where
     }
     let mut interactions = Vec::new();
     for i in b.global_interactions() {
-        let (kind, count) = classify(chip, &i.bus_name, &i.count, i.count_weight)?;
+        let (kind, count) = classify(chip, owned, &i.bus_name, &i.count, i.count_weight)?;
         interactions.push(Interaction { bus: i.bus_name.clone(), kind, tuple: i.fields.clone(), count });
     }
     // An exclusive group is one LogUp column whose numerator is Σ flag·count over its
@@ -166,7 +183,7 @@ where
     for g in b.exclusive_interactions() {
         for br in &g.branches {
             let gated = br.flag.clone() * br.count.clone();
-            let (kind, count) = classify(chip, &g.bus_name, &gated, br.count_weight)?;
+            let (kind, count) = classify(chip, owned, &g.bus_name, &gated, br.count_weight)?;
             interactions.push(Interaction { bus: g.bus_name.clone(), kind, tuple: br.fields.clone(), count });
         }
     }
@@ -392,6 +409,55 @@ fn export_honest(rev: &str, cap: &Captured) -> Result<String> {
     Ok(out)
 }
 
+// ───────────────────────────────────────────────────────────── ALU vectors
+
+/// SplitMix64 with a fixed seed: the random vector pairs are reproducible without a dependency.
+fn splitmix(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// The operand pairs every op is run on: the 9x9 edge set, then 64 seeded-random pairs.
+fn vector_pairs() -> Vec<(u32, u32)> {
+    const EDGE: [u32; 9] = [0, 1, 2, 31, 32, 0x7fff_ffff, 0x8000_0000, 0xffff_fffe, 0xffff_ffff];
+    let mut pairs: Vec<(u32, u32)> = EDGE.iter().flat_map(|&a| EDGE.iter().map(move |&b| (a, b))).collect();
+    let mut st = 0x5eed_a1u64;
+    for _ in 0..64 {
+        let r = splitmix(&mut st);
+        pairs.push((r as u32, (r >> 32) as u32));
+    }
+    pairs
+}
+
+/// `(code, a, b, AluOp::eval(a, b))` for every op and pair, evaluated by the Rust itself.
+fn export_vectors(rev: &str) -> String {
+    let pairs = vector_pairs();
+    let mut out = header(rev);
+    writeln!(out, "import Mathlib.Data.Nat.Notation\n").unwrap();
+    writeln!(out, "/-! `AluOp::eval` of `rand_zkvm::isa`, run by the exporter on {} operand pairs (the edge set", pairs.len()).unwrap();
+    writeln!(out, "{{0, 1, 2, 31, 32, 0x7fffffff, 0x80000000, 0xfffffffe, 0xffffffff}}², then 64 seeded-random pairs)").unwrap();
+    writeln!(out, "for each of the {} ops: {} vectors `(code, a, b, result)`. -/\n", AluOp::ALL.len(), pairs.len() * AluOp::ALL.len()).unwrap();
+    writeln!(out, "namespace Rand.Generated.RV32.AluVectors\n").unwrap();
+    writeln!(out, "-- One list per op: a single 2755-element literal exceeds the elaborator's recursion limit.").unwrap();
+    writeln!(out, "set_option maxRecDepth 8000\n").unwrap();
+    for op in AluOp::ALL {
+        writeln!(out, "/-- `{op:?}` (code {}): `(code, a, b, AluOp::eval(a, b))` for each pair. -/", op.code()).unwrap();
+        writeln!(out, "def vectors{} : List (ℕ × ℕ × ℕ × ℕ) :=", op.code()).unwrap();
+        for (i, &(a, b)) in pairs.iter().enumerate() {
+            let open = if i == 0 { "  [ " } else { "  , " };
+            writeln!(out, "{open}({}, {a}, {b}, {})", op.code(), op.eval(a, b)).unwrap();
+        }
+        writeln!(out, "  ]\n").unwrap();
+    }
+    let names: Vec<String> = AluOp::ALL.iter().map(|o| format!("vectors{}", o.code())).collect();
+    writeln!(out, "/-- All vectors, ops in code order. -/\ndef aluVectors : List (ℕ × ℕ × ℕ × ℕ) :=\n  {}\n", names.join(" ++ ")).unwrap();
+    writeln!(out, "end Rand.Generated.RV32.AluVectors").unwrap();
+    out
+}
+
 // ───────────────────────────────────────────────────────────── fixed tables
 
 fn canonical_rows(m: RowMajorMatrix<F>, width: usize, what: &str) -> Result<Vec<Vec<u64>>> {
@@ -429,7 +495,7 @@ fn export_tables(rev: &str) -> Result<String> {
 
 // ───────────────────────────────────────────────────────────── CLI
 
-const USAGE: &str = "usage: air2lean <alu|alu-honest|tables> --out <file.lean>";
+const USAGE: &str = "usage: air2lean <alu|alu-honest|alu-vectors|tables> --out <file.lean>";
 
 fn run(args: &[String]) -> Result<()> {
     let (cmd, out) = match args {
@@ -439,8 +505,9 @@ fn run(args: &[String]) -> Result<()> {
     let rev = circuits_rev()?;
     check_checkout(&rev)?;
     let text = match cmd {
-        "alu" => export_chip(&rev, "alu", "Rand.Generated.RV32.Alu", &capture("alu", &alu::AluAir)?)?,
-        "alu-honest" => export_honest(&rev, &capture("alu", &alu::AluAir)?)?,
+        "alu" => export_chip(&rev, "alu", "Rand.Generated.RV32.Alu", &capture("alu", "ALU", &alu::AluAir)?)?,
+        "alu-honest" => export_honest(&rev, &capture("alu", "ALU", &alu::AluAir)?)?,
+        "alu-vectors" => export_vectors(&rev),
         "tables" => export_tables(&rev)?,
         _ => return Err(USAGE.into()),
     };
@@ -481,13 +548,15 @@ mod tests {
                 4 => b.push_interaction(bus::RANGE8.name(), [x], Count::bounded(y, 0)),
                 5 => { bus::MEMORY.send(b, [x.clone()], Count::bounded(y.clone(), 1)); bus::MEMORY.receive(b, [x], Count::bounded(y, 1)); }
                 6 => { bus::RANGE8.table_entry(b, [x.clone()], y); bus::RANGE8.table_entry(b, [x], AB::Expr::from_u32(3)); }
+                7 => bus::RANGE8.lookup_key(b, [x], Count::bounded(-y, 1)),
+                8 => bus::RANGE8.lookup_key(b, [x], Count::bounded(AB::Expr::from_u64(GOLDILOCKS_P - 1), 1)),
                 _ => unreachable!(),
             }
         }
     }
 
     fn lean_of<const MODE: u8>() -> Result<String> {
-        export_chip("REV", "toy", "Toy", &capture("toy", &Toy::<MODE>)?)
+        export_chip("REV", "toy", "Toy", &capture("toy", "RANGE8", &Toy::<MODE>)?)
     }
 
     /// Review Focus 1: a next-row leaf is refused, never dropped.
@@ -524,10 +593,39 @@ mod tests {
         assert!(s.contains(r#"kind := .provide, tuple := [m ⟨0, by decide⟩], count := (3 : F)"#), "{s}");
     }
 
+    /// Hardening (a): a provide is accepted only on the bus the chip owns.
+    #[test]
+    fn provide_on_foreign_bus_is_an_error() {
+        let cap = capture("toy", "ALU", &Toy::<6>);
+        assert!(cap.err().unwrap().contains("the chip owns \"ALU\""));
+        // …and the owned bus is accepted (kinds_are_recovered, owner RANGE8).
+        assert!(lean_of::<6>().is_ok());
+    }
+
+    /// Hardening (b): a positive-weight lookup with a negated count is a table-side entry.
+    #[test]
+    fn negated_lookup_count_is_an_error() {
+        assert!(lean_of::<7>().unwrap_err().contains("negated count"));
+        assert!(lean_of::<8>().unwrap_err().contains("negated count"));
+        assert!(lean_of::<2>().is_ok());
+    }
+
+    /// The vectors: counts, the code order, and that the Rust edge cases are in them.
+    #[test]
+    fn vectors_cover_the_edge_cases() {
+        let s = export_vectors("REV");
+        assert_eq!(s.matches("\n  , (").count() + 19, 19 * (81 + 64));
+        assert!(s.contains("(15, 2147483648, 4294967295, 2147483648)")); // MIN / -1
+        assert!(s.contains("(17, 2147483648, 4294967295, 0)")); // MIN % -1
+        assert!(s.contains("(15, 31, 0, 4294967295)")); // div by zero
+        assert!(s.contains("(17, 31, 0, 31)")); // rem by zero
+        assert_eq!(s, export_vectors("REV"), "deterministic");
+    }
+
     /// The ALU exports with no extension constraints and its honest rows pass in Rust.
     #[test]
     fn alu_exports() {
-        let cap = capture("alu", &alu::AluAir).unwrap();
+        let cap = capture("alu", "ALU", &alu::AluAir).unwrap();
         export_chip("REV", "alu", "A", &cap).unwrap();
         assert!(honest_rows(&cap).unwrap().len() > 19);
     }

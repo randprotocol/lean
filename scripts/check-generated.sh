@@ -15,6 +15,7 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/RV32"
 "$bin" alu        --out "$tmp/RV32/Alu.lean"
 "$bin" alu-honest --out "$tmp/RV32/AluHonest.lean"
+"$bin" alu-vectors --out "$tmp/RV32/AluVectors.lean"
 "$bin" tables     --out "$tmp/RV32/Tables.lean"
 
 if ! diff -r "$tmp" Rand/Generated; then
