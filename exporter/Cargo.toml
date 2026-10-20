@@ -1,0 +1,33 @@
+[package]
+name = "air2lean"
+version = "0.1.0"
+edition = "2021"
+description = "Exports the Plonky3 AIR constraints of rand_zkvm's chips as Lean 4 definitions"
+license = "GPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "air2lean"
+path = "src/main.rs"
+
+# Its own workspace root: never absorbed into the fetched circuits checkout's.
+[workspace]
+
+[dependencies]
+# The circuits crate at the commit pinned in ../SOURCES.toml (scripts/fetch-sources.sh).
+rand_zkvm = { path = "../third_party/zkp-circuits/research" }
+# Exactly the Plonky3 versions research/Cargo.toml pins. research/ declares no [patch]
+# (the vendored forks under vendor/ are used by recursion/ and the fullnode, and touch
+# proving only), so none is replicated here.
+p3-air = "=0.7.0"
+p3-lookup = "=0.7.0"
+p3-field = "=0.7.0"
+p3-matrix = "=0.7.0"
+p3-goldilocks = "=0.7.0"
+
+[profile.dev]
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = 0

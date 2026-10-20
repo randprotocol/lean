@@ -19,3 +19,19 @@ jobs:
         run: lake build RandTest
       - name: Axiom audit
         run: scripts/audit.sh
+  generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal
+      - name: Cache exporter build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            exporter/target
+          key: exporter-${{ runner.os }}-${{ hashFiles('exporter/Cargo.lock', 'exporter/Cargo.toml', 'SOURCES.toml') }}
+      - name: Regenerate and diff Rand/Generated
+        run: scripts/check-generated.sh

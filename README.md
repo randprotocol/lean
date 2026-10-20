@@ -20,6 +20,11 @@ lake build RandTest
 scripts/audit.sh     # no sorry/admit/axiom/native_decide; published theorems use only propext, Classical.choice, Quot.sound
 ```
 
+`Rand/Generated/` is printed by the Rust exporter in `exporter/` (`air2lean`, Rust
+1.98.1) from the circuits commit pinned in `SOURCES.toml`; never edit it by hand.
+`scripts/check-generated.sh` fetches that commit, regenerates and diffs
+(`RAND_SOURCES_LOCAL_CIRCUITS=/path` fetches from a local clone).
+
 The field is Goldilocks, `p = 2^64 - 2^32 + 1`, modelled as `ZMod p` (`Rand/Field.lean`).
 
 ## License

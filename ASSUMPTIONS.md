@@ -17,3 +17,15 @@ with the proofs.
   and the RV32→rVM constraint emitter are trusted.
 - Honest replicas persist safety state before voting; < 1/3 Byzantine stake
   per epoch; epoch hand-off.
+- The RV32 lookup contracts (`Rand.rv32Contract`: RANGE8, POW2, AND4, OR4,
+  XOR4) are justified by the fixed tables' contents plus bus soundness: the
+  exporter prints the range and nibble chips' `preprocessed_trace`s into
+  `Rand/Generated/RV32/Tables.lean`, and `RandTest/Contracts.lean` checks each
+  contract against those rows by `decide`. The table chips' own AIRs (that the
+  provided multiplicities are the only entries on those buses) are not yet
+  proved; M2 proves them.
+- The exporter (`exporter/`, `air2lean`) is trusted to translate Plonky3's
+  symbolic constraint DAG faithfully. It fails on any leaf, bus or interaction
+  kind it does not translate; `scripts/check-generated.sh` (CI job
+  `generated`) regenerates `Rand/Generated/` from the pinned circuits commit
+  and fails on any difference.
