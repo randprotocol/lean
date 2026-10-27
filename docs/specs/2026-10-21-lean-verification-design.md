@@ -3,6 +3,10 @@
 Date: 2026-10-21. Status: draft for approval.
 Pins this design was written against: fullnode `246cb5f9` (v0.8.0, chain 21),
 circuits `b3e21d9` (rVM phase 5).
+Note: fullnode v0.8.0 vendors circuits `d217252` (`CIRCUITS_PIN` in its ci.yml), an ancestor of
+`b3e21d9`; this design reads `b3e21d9`, and `research/src/isa.rs`, `research/src/emulator.rs` and
+`recursion/src/isa.rs` are identical at the two commits, so the specs transcribed from them
+describe what v0.8.0 vendors. Re-check that before any claim about a later fullnode pin.
 
 ## 1. Intent
 
@@ -82,7 +86,7 @@ a larger, vague one.
 There are two STARK machines, both Plonky3 0.7.0 over Goldilocks. Both crates
 already state the rule this project formalises: **the emulator is the
 reference semantics; if the AIR disagrees with it, the AIR is wrong**
-(`research/AGENTS.md:304`, `recursion/src/lib.rs:27`).
+(`research/AGENTS.md:300`, `recursion/src/lib.rs:27–28`, both at circuits `b3e21d9`).
 
 ### 4.1 Where the constraints come from (decided)
 
@@ -101,7 +105,7 @@ pinned commit and fails on any diff. This is the drift guard for circuits.
 ### 4.2 The specs
 
 - **RV32 machine** (`circuits/research`): RV32IM subset, 19 `AluOp`s,
-  8 syscalls. Lean spec transcribed from `research/src/isa.rs`
+  9 syscalls (`SYS_HALT` 0 … `SYS_MODQ` 8, `research/src/isa.rs:12–71`). Lean spec transcribed from `research/src/isa.rs`
   (`AluOp::eval` :94, `BranchCond::taken` :135, decode :279) and
   `research/src/emulator.rs::execute` :179, cross-read with
   `research/docs/01-isa.md` (incl. deviations ISA-4/ISA-5).

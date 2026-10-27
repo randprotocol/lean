@@ -78,7 +78,7 @@ lean/
 ### Task 1: Lake project, field, CI skeleton, public pages
 
 **Files:**
-- Create: `lean-toolchain`, `lakefile.toml`, `Rand.lean`, `Rand/Field.lean`, `SOURCES.toml`, `README.md`, `ASSUMPTIONS.md`, `PROVEN.md`, `LICENSE` (Apache-2.0, matching fullnode's — check `../fullnode/LICENSE`), `.gitignore`, `.github/workflows/ci.yml`, `scripts/audit.sh`, `Audit.lean`
+- Create: `lean-toolchain`, `lakefile.toml`, `Rand.lean`, `Rand/Field.lean`, `SOURCES.toml`, `README.md`, `ASSUMPTIONS.md`, `PROVEN.md`, `LICENSE` (licence to be decided by the owner: fullnode and circuits are both GPL-3.0, so GPL-3.0 would match them; Apache-2.0 would not — check `../fullnode/LICENSE`), `.gitignore`, `.github/workflows/ci.yml`, `scripts/audit.sh`, `Audit.lean`
 - Test: `RandTest/Field.lean`
 
 **Interfaces:**
