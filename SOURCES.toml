@@ -1,0 +1,6 @@
+[circuits]
+repo = "https://github.com/randprotocol/zkp-circuits"
+rev  = "b3e21d9ea16225452bcd03a94317cb61e1705979"
+[fullnode]
+repo = "https://github.com/randprotocol/fullnode"
+rev  = "246cb5f97624e9f9d70a929941298b78511d5fe8"

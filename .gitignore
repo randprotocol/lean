@@ -1,0 +1,4 @@
+.lake/
+build/
+third_party/
+exporter/target/
